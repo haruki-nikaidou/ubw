@@ -82,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
     
     if let Some(shutdown_after) = shutdown_after {
         before_request::shutdown(shutdown_tx, *shutdown_after).await?;
+    } else {
+        // wait for shutdown
+        shutdown_rx.clone().changed().await?;
     }
     
     Ok(())
