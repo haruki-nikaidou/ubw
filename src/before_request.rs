@@ -99,7 +99,7 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
         header_map,
         accept_headers: args.accept_headers,
         proxy_headers: args.proxy_headers,
-        max_time: args.max_time,
+        max_time: args.max_time.map(|d| chrono::Duration::seconds(d.as_secs_f64().round() as i64)),
         request_counter: RequestCounter::new(),
     })
 }

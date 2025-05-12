@@ -65,7 +65,7 @@ pub struct WorkInstance {
     pub header_map: HeaderMap,
     pub accept_headers: Vec<CompactString>,
     pub proxy_headers: Vec<CompactString>,
-    pub max_time: Option<humantime::Duration>,
+    pub max_time: Option<chrono::Duration>,
     pub request_counter: RequestCounter,
 }
 
