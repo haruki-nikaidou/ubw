@@ -41,6 +41,12 @@ pub enum UbwError {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // if no args, only cast
+    if std::env::args().len() == 1 {
+        emiya::wait_for_incantation().await?;
+        return Ok(());
+    }
+    
     let opts = opts::Opts::parse();
     
     let concurrent = opts.concurrent;
