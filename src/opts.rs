@@ -15,7 +15,7 @@ pub struct Opts {
     #[arg(help = "The number of concurrent requests", short, default_value_t = 1)]
     pub concurrent: u16,
 
-    #[arg(help = "The maximum time to wait for a response", short = 't')]
+    #[arg(help = "The maximum time to wait for a response", short = 't', default_value = None)]
     pub max_time: Option<humantime::Duration>,
 
     #[arg(help = "Simulate host file", short = 'i')]
