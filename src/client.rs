@@ -88,10 +88,28 @@ impl WorkInstance {
     }
 
     pub async fn build_request(&self) -> Result<http::Request<Full<Bytes>>, http::Error> {
+        // Get path and query from URL
+        let path = self.url.path();
+        let path_and_query = if let Some(query) = self.url.query() {
+            format!("{}?{}", path, query)
+        } else {
+            path.to_string()
+        };
+
         let mut builder = http::Request::builder()
-            .uri(self.url.as_str())
+            .uri(path_and_query)
             .method(self.mode.method())
             .version(http::Version::HTTP_11);
+
+        // Add Host header if not already present
+        if let Some(host) = self.url.host_str() {
+            let host_value = if let Some(port) = self.url.port() {
+                format!("{}:{}", host, port)
+            } else {
+                host.to_string()
+            };
+            builder = builder.header("Host", host_value);
+        }
 
         for header in &self.header_map {
             builder = builder.header(header.0, header.1);
