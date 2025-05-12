@@ -3,13 +3,14 @@ use std::str::FromStr;
 use clap::Parser;
 use compact_str::CompactString;
 use hyper::{HeaderMap, Method};
+use url::Url;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(arg_required_else_help = true)]
 pub struct Opts {
     #[arg(help = "The URL to fetch", short)]
-    pub url: hyper::Uri,
+    pub url: Url,
     
     #[arg(help = "The number of concurrent requests", short, default_value_t = 1)]
     pub concurrent: u16,

@@ -5,6 +5,8 @@
 pub mod opts;
 pub mod work_mode;
 pub mod before_request;
+pub mod client;
+mod pcg64si;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UbwError {
@@ -22,6 +24,9 @@ pub enum UbwError {
     
     #[error("Unsupported method {0}")]
     UnsupportedMethod(hyper::Method),
+    
+    #[error("The URL is not HTTP or HTTPS")]
+    WeirdUrl,
     
     #[error("Failed to parse header list {0}")]
     InvalidHeaderList(#[from] opts::ParseHeaderListError),

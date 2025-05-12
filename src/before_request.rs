@@ -1,8 +1,10 @@
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::lookup_host;
+use url::Host;
+use crate::client::WorkInstance;
 use crate::opts::{Opts, WrappedHeaderMap};
 use crate::UbwError;
-use crate::work_mode::{PostWorkModeSpec, RequestCounter, WorkInstance, WorkMode};
+use crate::work_mode::{PostWorkModeSpec, RequestCounter, WorkMode};
 
 pub async fn read_body_from(path: &std::path::PathBuf) -> Result<bytes::Bytes, std::io::Error> {
     tokio::fs::read(path)
@@ -40,20 +42,39 @@ pub async fn resolve_ipv6(host: &str) -> Result<Option<IpAddr>, std::io::Error> 
 pub async fn prepare_work_instance(
     args: Opts,
 ) -> Result<WorkInstance, UbwError> {
-    let resolve = if args.ipv6 {
-        let host = args.url.host()
-            .ok_or(UbwError::NoWayToResolveHost)?;
-        let v6 = resolve_ipv6(host).await.map_err(UbwError::FailedToResolveDns)?;
-        let v4 = resolve_ipv4(host).await.map_err(UbwError::FailedToResolveDns)?;
-        v6.or(v4)
-    } else if args.ipv4 {
-        let host = args.url.host()
-            .ok_or(UbwError::NoWayToResolveHost)?;
-        resolve_ipv4(host).await.map_err(UbwError::FailedToResolveDns)?
-    } else {
-        None
+    let resolve = match (&args.url.host(), args.ipv4, args.ipv6) {
+        (Some(Host::Domain(host)), v4, v6) => {
+            if v6 {
+                let v6_resolve = resolve_ipv6(host).await.map_err(UbwError::FailedToResolveDns)?;
+                if v4 {
+                    let v4_resolve = resolve_ipv4(host).await.map_err(UbwError::FailedToResolveDns)?;
+                    v6_resolve.or(v4_resolve)
+                } else {
+                    v6_resolve
+                }
+            } else if v4 {
+                resolve_ipv4(host).await.map_err(UbwError::FailedToResolveDns)?
+            } else {
+                None
+            }
+        },
+        (Some(Host::Ipv4(host)), true, _) => {
+            Some(IpAddr::V4(*host))
+        },
+        (Some(Host::Ipv6(host)), _, true) => {
+            Some(IpAddr::V6(*host))
+        },
+        (None, _, _) => {
+            None
+        },
+        _ => {
+            return Err(UbwError::NoWayToResolveHost);
+        },
     };
-    let address = resolve.or(args.host);
+    let address = resolve
+        .or(args.host)
+        .ok_or(UbwError::NoWayToResolveHost)?;
+    let address = SocketAddr::new(address, args.url.port_or_known_default().ok_or(UbwError::WeirdUrl)?);
 
     let work_mode = match (args.method, args.body_string, args.body_file) {
         (hyper::Method::GET, _, _) => WorkMode::Get,
@@ -69,13 +90,13 @@ pub async fn prepare_work_instance(
         (hyper::Method::POST, Some(_), Some(_)) => return Err(UbwError::RequirePostBody),
         (method, _, _) => return Err(UbwError::UnsupportedMethod(method)),
     };
-    
+
     let header_map: WrappedHeaderMap = args.header.try_into()?;
     let header_map = header_map.0;
-    
+
     Ok(WorkInstance {
         url: args.url,
-        address: address.ok_or(UbwError::NoWayToResolveHost)?,
+        address,
         mode: work_mode,
         header_map,
         accept_headers: args.accept_headers,
