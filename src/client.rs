@@ -119,22 +119,6 @@ impl WorkInstance {
         }
     }
 
-    fn add_count(&self, response: &ClientResult) {
-        match response {
-            ClientResult::Code(code_type) => self.request_counter.inc(*code_type),
-            ClientResult::Timeout => self.request_counter.inc(ClientResponseCodeType::Failure),
-            ClientResult::TlsError(_) => self.request_counter.inc(ClientResponseCodeType::Failure),
-            ClientResult::HyperError(_) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure)
-            }
-            ClientResult::HttpError(_) => self.request_counter.inc(ClientResponseCodeType::Failure),
-            ClientResult::IoError(_) => self.request_counter.inc(ClientResponseCodeType::Failure),
-            ClientResult::ConnectionClosed => {
-                self.request_counter.inc(ClientResponseCodeType::Failure)
-            }
-        }
-    }
-
     /// Sends a single request using an existing connection if provided, or creates a new one.
     /// Returns the result of the request and a boolean indicating if a TLS handshake was performed.
     pub async fn send_single_request(

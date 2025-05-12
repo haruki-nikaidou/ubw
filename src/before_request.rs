@@ -12,7 +12,7 @@ pub async fn read_body_from(path: &std::path::PathBuf) -> Result<bytes::Bytes, s
 
 /// Resolves a hostname to an IPv4 address
 pub async fn resolve_ipv4(host: &str) -> Result<Option<IpAddr>, std::io::Error> {
-    let host_with_port = format!("{}:0", host);
+    let host_with_port = format!("{}:443", host);
 
     for addr in lookup_host(&host_with_port).await? {
         if let SocketAddr::V4(v4) = addr {
@@ -25,7 +25,7 @@ pub async fn resolve_ipv4(host: &str) -> Result<Option<IpAddr>, std::io::Error> 
 
 /// Resolves a hostname to an IPv6 address
 pub async fn resolve_ipv6(host: &str) -> Result<Option<IpAddr>, std::io::Error> {
-    let host_with_port = format!("{}:0", host);
+    let host_with_port = format!("{}:443", host);
 
     for addr in lookup_host(&host_with_port).await? {
         if let SocketAddr::V6(v6) = addr {
@@ -37,7 +37,9 @@ pub async fn resolve_ipv6(host: &str) -> Result<Option<IpAddr>, std::io::Error> 
 }
 
 pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError> {
-    let resolve = match (&args.url.host(), args.ipv4, args.ipv6) {
+    #[allow(clippy::unwrap_used)]
+    let url = args.url.as_ref().unwrap();
+    let resolve = match (url.host(), args.ipv4, args.ipv6) {
         (Some(Host::Domain(host)), v4, v6) => {
             if v6 {
                 let v6_resolve = resolve_ipv6(host)
@@ -59,8 +61,8 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
                 None
             }
         }
-        (Some(Host::Ipv4(host)), true, _) => Some(IpAddr::V4(*host)),
-        (Some(Host::Ipv6(host)), _, true) => Some(IpAddr::V6(*host)),
+        (Some(Host::Ipv4(host)), true, _) => Some(IpAddr::V4(host)),
+        (Some(Host::Ipv6(host)), _, true) => Some(IpAddr::V6(host)),
         (None, _, _) => None,
         _ => {
             return Err(UbwError::NoWayToResolveHost);
@@ -69,7 +71,7 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
     let address = resolve.or(args.host).ok_or(UbwError::NoWayToResolveHost)?;
     let address = SocketAddr::new(
         address,
-        args.url.port_or_known_default().ok_or(UbwError::WeirdUrl)?,
+        url.port_or_known_default().ok_or(UbwError::WeirdUrl)?,
     );
 
     let work_mode = match (args.method, args.body_string, args.body_file) {
@@ -93,7 +95,7 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
     let header_map = header_map.0;
 
     Ok(WorkInstance {
-        url: args.url,
+        url: url.clone(),
         address,
         mode: work_mode,
         header_map,

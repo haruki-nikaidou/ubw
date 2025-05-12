@@ -10,7 +10,7 @@ use url::Url;
 #[command(arg_required_else_help = true)]
 pub struct Opts {
     #[arg(help = "The URL to fetch", short)]
-    pub url: Url,
+    pub url: Option<Url>,
 
     #[arg(help = "The number of concurrent requests", short, default_value_t = 1)]
     pub concurrent: u16,
@@ -51,6 +51,9 @@ pub struct Opts {
 
     #[arg(help = "Use IPv4", short = '4', default_value_t = true)]
     pub ipv4: bool,
+    
+    #[arg(help = "Don't wait for incitation", long = "instant-cast", default_value_t = false)]
+    pub instant_cast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,6 +7,7 @@ pub mod client;
 pub mod opts;
 mod pcg64si;
 pub mod work_mode;
+pub mod emiya;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UbwError {
