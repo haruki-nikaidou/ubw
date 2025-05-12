@@ -24,10 +24,20 @@ impl WorkMode {
 
 #[derive(Debug, Default)]
 pub struct RequestCounter {
+    /// HTTP 2xx
     code2_count: AtomicU64,
+    
+    /// HTTP 3xx
     code3_count: AtomicU64,
+    
+    /// HTTP 4xx
     code4_count: AtomicU64,
+    
+    /// HTTP 5xx
     code5_count: AtomicU64,
+    
+    /// Timeout, TLS error, Hyper error
+    failure_count: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +46,7 @@ pub enum ClientResponseCodeType {
     Code3,
     Code4,
     Code5,
+    Failure,
 }
 
 impl RequestCounter {
@@ -49,6 +60,7 @@ impl RequestCounter {
             ClientResponseCodeType::Code3 => &self.code3_count,
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
+            ClientResponseCodeType::Failure => &self.failure_count,
         }.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     
@@ -58,6 +70,7 @@ impl RequestCounter {
             ClientResponseCodeType::Code3 => &self.code3_count,
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
+            ClientResponseCodeType::Failure => &self.failure_count,
         }.load(std::sync::atomic::Ordering::Relaxed)
     }
     
@@ -67,6 +80,7 @@ impl RequestCounter {
             ClientResponseCodeType::Code3 => &self.code3_count,
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
+            ClientResponseCodeType::Failure => &self.failure_count,
         }.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
