@@ -105,3 +105,11 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
         request_counter: RequestCounter::new(),
     })
 }
+
+pub async fn shutdown(
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    duration: std::time::Duration,
+) -> Result<(), tokio::sync::watch::error::SendError<bool>> {
+    tokio::time::sleep(duration).await;
+    shutdown_tx.send(true)
+}

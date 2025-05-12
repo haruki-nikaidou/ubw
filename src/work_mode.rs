@@ -87,3 +87,30 @@ impl RequestCounter {
         .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
+
+pub async fn counter_print(
+    counter: &RequestCounter,
+    shutdown_signal: &mut tokio::sync::watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                println!("2xx: {}, 3xx: {}, 4xx: {}, 5xx: {}, failure: {}",
+                    counter.get(ClientResponseCodeType::Code2),
+                    counter.get(ClientResponseCodeType::Code3),
+                    counter.get(ClientResponseCodeType::Code4),
+                    counter.get(ClientResponseCodeType::Code5),
+                    counter.get(ClientResponseCodeType::Failure),
+                );
+                counter.reset(ClientResponseCodeType::Code2);
+                counter.reset(ClientResponseCodeType::Code3);
+                counter.reset(ClientResponseCodeType::Code4);
+                counter.reset(ClientResponseCodeType::Code5);
+                counter.reset(ClientResponseCodeType::Failure);
+            }
+            _ = shutdown_signal.changed() => {
+                break;
+            }
+        }
+    }
+}

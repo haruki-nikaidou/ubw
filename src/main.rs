@@ -2,6 +2,10 @@
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 
+use clap::Parser;
+use tokio::task::JoinSet;
+use crate::work_mode::counter_print;
+
 pub mod before_request;
 pub mod client;
 pub mod opts;
@@ -36,4 +40,44 @@ pub enum UbwError {
 }
 
 #[tokio::main]
-async fn main() {}
+async fn main() -> anyhow::Result<()> {
+    let opts = opts::Opts::parse();
+    
+    let concurrent = opts.concurrent;
+    let shutdown_after = opts.max_time;
+
+    if !opts.instant_cast {
+        emiya::wait_for_incantation().await?;
+    }
+
+    let work_instance = before_request::prepare_work_instance(opts).await?;
+    let work_instance = std::sync::Arc::new(work_instance);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let mut handlers = JoinSet::<()>::new();
+    
+    for _ in 0..concurrent {
+        let work_instance = work_instance.clone();
+        let mut shutdown_rx = shutdown_rx.clone();
+        handlers.spawn(async move {
+            client::request_loop(work_instance, &mut shutdown_rx).await;
+        });
+    }
+    
+    let arc_for_counter_monitor = work_instance.clone();
+    let shutdown_sig_for_counter_monitor = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let mut shutdown_sig_for_counter_monitor = shutdown_sig_for_counter_monitor;
+        counter_print(
+            &arc_for_counter_monitor.request_counter,
+            &mut shutdown_sig_for_counter_monitor,
+        ).await
+    });
+    
+    if let Some(shutdown_after) = shutdown_after {
+        before_request::shutdown(shutdown_tx, *shutdown_after).await?;
+    }
+    
+    Ok(())
+}
+

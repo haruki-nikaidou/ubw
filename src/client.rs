@@ -6,6 +6,7 @@ use hyper::client::conn::http1;
 use hyper::{HeaderMap, StatusCode, http};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsStream, native_tls};
 use url::Url;
@@ -280,6 +281,23 @@ impl WorkInstance {
             Err(e) => {
                 self.request_counter.inc(ClientResponseCodeType::Failure);
                 (ClientResult::HyperError(e), did_tls_handshake, None)
+            }
+        }
+    }
+}
+
+pub async fn request_loop(
+    work_instance: Arc<WorkInstance>,
+    shutdown_signal: &mut tokio::sync::watch::Receiver<bool>,
+) {
+    let mut send_request = None;
+    loop {
+        tokio::select! {
+            _ = shutdown_signal.changed() => {
+                break;
+            }
+            result = work_instance.send_request_with_reuse(send_request) => {
+                send_request = result.2;
             }
         }
     }
