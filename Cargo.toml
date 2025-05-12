@@ -1,0 +1,20 @@
+[package]
+name = "ubw"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Unlicense"
+
+[dependencies]
+tokio = {version = "1", features = ["full"]}
+anyhow = "1.0.98"
+thiserror = "2.0"
+clap = {version = "4.5.38", features = ["derive"]}
+chrono = "0.4"
+bytes = "1"
+compact_str = { version = "0.9.0", features = ["bytes"] }
+
+hyper = {version = "1.6.0", features = ["client", "http1", "http2"]}
+tokio-native-tls = "0.3.1"
+
+humantime = "2.2.0"
