@@ -1,6 +1,6 @@
-use std::sync::atomic::AtomicU64;
 use bytes::Bytes;
 use compact_str::CompactString;
+use std::sync::atomic::AtomicU64;
 #[derive(Debug, Clone)]
 pub struct PostWorkModeSpec {
     pub body: Bytes,
@@ -26,16 +26,16 @@ impl WorkMode {
 pub struct RequestCounter {
     /// HTTP 2xx
     code2_count: AtomicU64,
-    
+
     /// HTTP 3xx
     code3_count: AtomicU64,
-    
+
     /// HTTP 4xx
     code4_count: AtomicU64,
-    
+
     /// HTTP 5xx
     code5_count: AtomicU64,
-    
+
     /// Timeout, TLS error, Hyper error
     failure_count: AtomicU64,
 }
@@ -53,7 +53,7 @@ impl RequestCounter {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     pub fn inc(&self, code_type: ClientResponseCodeType) {
         match code_type {
             ClientResponseCodeType::Code2 => &self.code2_count,
@@ -61,9 +61,10 @@ impl RequestCounter {
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
             ClientResponseCodeType::Failure => &self.failure_count,
-        }.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    
+
     pub fn get(&self, code_type: ClientResponseCodeType) -> u64 {
         match code_type {
             ClientResponseCodeType::Code2 => &self.code2_count,
@@ -71,9 +72,10 @@ impl RequestCounter {
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
             ClientResponseCodeType::Failure => &self.failure_count,
-        }.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        .load(std::sync::atomic::Ordering::Relaxed)
     }
-    
+
     pub fn reset(&self, code_type: ClientResponseCodeType) {
         match code_type {
             ClientResponseCodeType::Code2 => &self.code2_count,
@@ -81,6 +83,7 @@ impl RequestCounter {
             ClientResponseCodeType::Code4 => &self.code4_count,
             ClientResponseCodeType::Code5 => &self.code5_count,
             ClientResponseCodeType::Failure => &self.failure_count,
-        }.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
