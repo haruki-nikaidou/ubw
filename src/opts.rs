@@ -10,7 +10,7 @@ use url::Url;
 #[command(arg_required_else_help = true)]
 pub struct Opts {
     #[arg(help = "The URL to fetch", short)]
-    pub url: Option<Url>,
+    pub url: Url,
 
     #[arg(help = "The number of concurrent requests", short, default_value_t = 1)]
     pub concurrent: u16,

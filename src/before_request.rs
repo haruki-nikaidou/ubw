@@ -37,8 +37,7 @@ pub async fn resolve_ipv6(host: &str) -> Result<Option<IpAddr>, std::io::Error> 
 }
 
 pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError> {
-    #[allow(clippy::unwrap_used)]
-    let url = args.url.as_ref().unwrap();
+    let url = args.url;
     let resolve = match (url.host(), args.ipv4, args.ipv6) {
         (Some(Host::Domain(host)), v4, v6) => {
             if v6 {
