@@ -19,7 +19,7 @@
 ## Usage
 
 ```bash
-ubw --some-args
+ubw 
 ```
 
 then, type in the incantation of UBW.
