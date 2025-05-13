@@ -204,16 +204,16 @@ pub async fn send_single_request(
 
 pub async fn request_loop(
     work_instance: Arc<WorkInstance>,
-    request: Arc<http::Request<Full<Bytes>>>,
     shutdown_signal: &mut tokio::sync::watch::Receiver<bool>,
-) {
+) -> anyhow::Result<()> {
     let mut state = WorkerState::default();
+    let request = work_instance.build_request().await?;
     loop {
         tokio::select! {
             _ = shutdown_signal.changed() => {
-                break;
+                break Ok(());
             }
-            result = work_instance.send_request_with_reuse((*request).clone(), state) => {
+            result = work_instance.send_request_with_reuse(request.clone(), state) => {
                 state = result;
             }
         }
