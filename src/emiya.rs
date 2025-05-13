@@ -27,7 +27,7 @@ pub async fn wait_for_incantation() -> io::Result<()> {
         if line.contains(incantation[current_phrase]) {
             current_phrase += 1;
             if current_phrase < incantation.len() {
-                println!("Continue...");
+                println!("\nContinue...");
             }
         }
     }
