@@ -38,6 +38,9 @@ pub struct RequestCounter {
 
     /// Timeout, TLS error, Hyper error
     failure_count: AtomicU64,
+    
+    /// Total number of requests sent
+    total_count: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +66,7 @@ impl RequestCounter {
             ClientResponseCodeType::Failure => &self.failure_count,
         }
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.total_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get(&self, code_type: ClientResponseCodeType) -> u64 {
@@ -74,6 +78,10 @@ impl RequestCounter {
             ClientResponseCodeType::Failure => &self.failure_count,
         }
         .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    
+    pub fn get_total(&self) -> u64 {
+        self.total_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn reset(&self, code_type: ClientResponseCodeType) {
@@ -95,12 +103,13 @@ pub async fn counter_print(
     loop {
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                println!("2xx: {}, 3xx: {}, 4xx: {}, 5xx: {}, failure: {}",
+                println!("2xx: {}, 3xx: {}, 4xx: {}, 5xx: {}, failure: {}, total: {}",
                     counter.get(ClientResponseCodeType::Code2),
                     counter.get(ClientResponseCodeType::Code3),
                     counter.get(ClientResponseCodeType::Code4),
                     counter.get(ClientResponseCodeType::Code5),
                     counter.get(ClientResponseCodeType::Failure),
+                    counter.get_total(),
                 );
                 counter.reset(ClientResponseCodeType::Code2);
                 counter.reset(ClientResponseCodeType::Code3);

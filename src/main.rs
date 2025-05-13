@@ -4,6 +4,7 @@
 
 use clap::Parser;
 use tokio::task::JoinSet;
+use tokio::signal;
 use crate::work_mode::counter_print;
 
 pub mod before_request;
@@ -80,13 +81,74 @@ async fn main() -> anyhow::Result<()> {
         ).await
     });
     
+    // Handle graceful shutdown from signals
+    tokio::spawn(handle_shutdown_signals(shutdown_tx.clone()));
+    
     if let Some(shutdown_after) = shutdown_after {
-        before_request::shutdown(shutdown_tx, *shutdown_after).await?;
-    } else {
-        // wait for shutdown
-        shutdown_rx.clone().changed().await?;
+        // Create a separate task for the timed shutdown
+        let shutdown_tx_for_timer = shutdown_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = before_request::shutdown(shutdown_tx_for_timer, *shutdown_after).await {
+                eprintln!("Failed to send shutdown signal: {e}");
+            }
+        });
     }
     
+    // Wait for shutdown signal
+    shutdown_rx.clone().changed().await?;
+    println!("Shutting down gracefully...");
+    
+    // Wait for all tasks to complete (optional timeout could be added)
+    while handlers.join_next().await.is_some() {}
+    
+    println!("All tasks completed, goodbye!");
     Ok(())
 }
 
+async fn handle_shutdown_signals(shutdown_tx: tokio::sync::watch::Sender<bool>) -> anyhow::Result<()> {
+    let ctrl_c = async {
+        #[allow(clippy::expect_used)]
+        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        #[allow(clippy::expect_used)]
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install terminate signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    #[cfg(windows)]
+    #[allow(clippy::expect_used)]
+    let ctrl_shutdown = async {
+        signal::windows::ctrl_shutdown()
+            .expect("Failed to install Ctrl+Shutdown handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(windows))]
+    let ctrl_shutdown = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            println!("Received Ctrl+C signal");
+        }
+        _ = terminate => {
+            println!("Received terminate signal");
+        }
+        _ = ctrl_shutdown => {
+            println!("Received shutdown signal");
+        }
+    }
+
+    // Send shutdown signal to all tasks
+    let _ = shutdown_tx.send(true);
+    
+    Ok(())
+}
