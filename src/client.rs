@@ -160,19 +160,31 @@ impl WorkInstance {
         request: http::Request<Full<Bytes>>,
         worker_state: WorkerState,
     ) -> WorkerState {
+        const MAX_RETRIES: usize = 10;
+        let mut retries = 0;
+
         // If we have an existing connection, try to use it
         if let Some(send_request) = worker_state.existing_request {
             return send_single_request(send_request, request, &self.request_counter).await;
         }
 
-        // No existing connection or it failed, create a new one
-        match self.init_state().await {
-            Ok(state) => {
-                send_single_request(state, request, &self.request_counter).await
-            },
-            Err(_) => WorkerState {
-                existing_request: None,
-            },
+        // No existing connection or it failed, create a new one with retries
+        loop {
+            match self.init_state().await {
+                Ok(state) => {
+                    return send_single_request(state, request.clone(), &self.request_counter).await;
+                },
+                Err(_) => {
+                    retries += 1;
+                    if retries >= MAX_RETRIES {
+                        self.request_counter.inc(ClientResponseCodeType::Failure);
+                        return WorkerState {
+                            existing_request: None,
+                        };
+                    }
+                    // Continue to retry
+                }
+            }
         }
     }
 }
@@ -182,21 +194,30 @@ pub async fn send_single_request(
     request: http::Request<Full<Bytes>>,
     counter: &RequestCounter,
 ) -> WorkerState {
-    match conn.send_request(request).await {
-        Ok(response) => {
-            let status = response.status();
-            let code_type = WorkInstance::status_to_code_type(status);
-            counter.inc(code_type);
-            // Consume the response body to free up the connection for reuse
-            let _ = response.collect().await;
-            WorkerState {
-                existing_request: Some(conn),
+    const MAX_RETRIES: usize = 10;
+    let mut retries = 0;
+
+    loop {
+        match conn.send_request(request.clone()).await {
+            Ok(response) => {
+                let status = response.status();
+                let code_type = WorkInstance::status_to_code_type(status);
+                counter.inc(code_type);
+                // Consume the response body to free up the connection for reuse
+                let _ = response.collect().await;
+                return WorkerState {
+                    existing_request: Some(conn),
+                };
             }
-        }
-        Err(_) => {
-            counter.inc(ClientResponseCodeType::Failure);
-            WorkerState {
-                existing_request: None,
+            Err(_) => {
+                retries += 1;
+                if retries >= MAX_RETRIES {
+                    counter.inc(ClientResponseCodeType::Failure);
+                    return WorkerState {
+                        existing_request: None,
+                    };
+                }
+                // Continue to retry
             }
         }
     }
