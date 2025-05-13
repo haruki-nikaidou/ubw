@@ -7,9 +7,12 @@ use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use crossbeam::queue::ArrayQueue;
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsStream, native_tls};
 use url::Url;
+
+type Http1Conn = http1::SendRequest<Full<Bytes>>;
 
 pub enum Stream {
     Tcp(TcpStream),
@@ -20,10 +23,7 @@ impl Stream {
     pub fn is_tls(&self) -> bool {
         matches!(self, Stream::Tls(_))
     }
-    async fn handshake_http1(
-        self,
-        with_upgrade: bool,
-    ) -> Result<http1::SendRequest<Full<Bytes>>, hyper::Error> {
+    async fn handshake_http1(self, with_upgrade: bool) -> Result<Http1Conn, hyper::Error> {
         match self {
             Stream::Tcp(stream) => {
                 let (send_request, conn) = http1::handshake(TokioIo::new(stream)).await?;
@@ -54,24 +54,42 @@ pub struct WorkInstance {
     pub mode: WorkMode,
     pub header_map: HeaderMap,
     pub request_counter: RequestCounter,
+    pub connection_pool: Http1ConnectionPool,
 }
 
-#[derive(Debug, Default)]
-pub struct WorkerState {
-    pub existing_request: Option<http1::SendRequest<Full<Bytes>>>,
+#[derive(Debug)]
+pub struct Http1ConnectionPool {
+    queue: Arc<ArrayQueue<Http1Conn>>,
 }
 
-impl WorkerState {
-    pub fn new(existing_request: http1::SendRequest<Full<Bytes>>) -> Self {
+impl Http1ConnectionPool {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            existing_request: Some(existing_request),
+            queue: Arc::new(ArrayQueue::new(capacity)),
+        }
+    }
+
+    pub fn try_get(&self) -> Option<Http1Conn> {
+        self.queue.pop()
+    }
+
+    pub fn put(&self, conn: Http1Conn) {
+        let _ = self.queue.push(conn); // drop if full
+    }
+
+    pub async fn get_or_connect(&self, work_instance: &WorkInstance) -> anyhow::Result<Http1Conn> {
+        if let Some(conn) = self.try_get() {
+            Ok(conn)
+        } else {
+            work_instance.connect().await
         }
     }
 }
 
+
 impl WorkInstance {
-    /// Connect to the socket, if TLS is needed, perform a TLS handshake. 
-    pub async fn connect(&self) -> anyhow::Result<Stream> {
+    /// Connect to the socket, if TLS is needed, perform a TLS handshake.
+    async fn connect_socket(&self) -> anyhow::Result<Stream> {
         let stream = TcpStream::connect(&self.address).await?;
         if self.url.scheme() == "https" {
             return Ok(self.tls(stream).await.map(Stream::Tls)?);
@@ -142,80 +160,42 @@ impl WorkInstance {
     }
 
     /// Initializes the worker state by connecting to the server and performing a TLS handshake if needed.
-    pub async fn init_state(
-        &self,
-    ) -> anyhow::Result<http1::SendRequest<Full<Bytes>>> {
-        let stream = self.connect().await?;
+    pub async fn connect(&self) -> anyhow::Result<Http1Conn> {
+        let stream = self.connect_socket().await?;
         let send_request = stream.handshake_http1(false).await?;
         Ok(send_request)
     }
 
-    /// Sends a single request and returns a new SendRequest object that can be reused
-    /// for subsequent requests, along with the result and whether a TLS handshake was performed.
-    pub async fn send_request_with_reuse(
+    pub async fn send(
         &self,
         request: http::Request<Full<Bytes>>,
-        worker_state: WorkerState,
-    ) -> WorkerState {
+    ) {
         const MAX_RETRIES: usize = 10;
         let mut retries = 0;
 
-        // If we have an existing connection, try to use it
-        if let Some(send_request) = worker_state.existing_request {
-            return send_single_request(send_request, request, &self.request_counter).await;
-        }
-
-        // No existing connection or it failed, create a new one with retries
         loop {
-            match self.init_state().await {
-                Ok(state) => {
-                    return send_single_request(state, request.clone(), &self.request_counter).await;
-                },
+            let Ok(mut conn) = self.connection_pool.get_or_connect(self).await else {
+                self.request_counter.inc(ClientResponseCodeType::Failure);
+                return 
+            };
+            
+            match conn.send_request(request.clone()).await {
+                Ok(response) => {
+                    let status = response.status();
+                    let code_type = WorkInstance::status_to_code_type(status);
+                    self.request_counter.inc(code_type);
+                    // Consume the response body to free up the connection for reuse
+                    let _ = response.collect().await;
+                    return 
+                }
                 Err(_) => {
                     retries += 1;
                     if retries >= MAX_RETRIES {
                         self.request_counter.inc(ClientResponseCodeType::Failure);
-                        return WorkerState {
-                            existing_request: None,
-                        };
+                        return 
                     }
                     tokio::time::sleep(Duration::from_millis(2u64.pow(retries as u32))).await;
-                    // Continue to retry
                 }
-            }
-        }
-    }
-}
-
-pub async fn send_single_request(
-    mut conn: http1::SendRequest<Full<Bytes>>,
-    request: http::Request<Full<Bytes>>,
-    counter: &RequestCounter,
-) -> WorkerState {
-    const MAX_RETRIES: usize = 10;
-    let mut retries = 0;
-
-    loop {
-        match conn.send_request(request.clone()).await {
-            Ok(response) => {
-                let status = response.status();
-                let code_type = WorkInstance::status_to_code_type(status);
-                counter.inc(code_type);
-                // Consume the response body to free up the connection for reuse
-                let _ = response.collect().await;
-                return WorkerState {
-                    existing_request: Some(conn),
-                };
-            }
-            Err(_) => {
-                retries += 1;
-                if retries >= MAX_RETRIES {
-                    counter.inc(ClientResponseCodeType::Failure);
-                    return WorkerState {
-                        existing_request: None,
-                    };
-                }
-                // Continue to retry
             }
         }
     }
@@ -225,16 +205,13 @@ pub async fn request_loop(
     work_instance: Arc<WorkInstance>,
     shutdown_signal: &mut tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let mut state = WorkerState::default();
     let request = work_instance.build_request().await?;
     loop {
         tokio::select! {
             _ = shutdown_signal.changed() => {
                 break Ok(());
             }
-            result = work_instance.send_request_with_reuse(request.clone(), state) => {
-                state = result;
-            }
+            _ = work_instance.send(request.clone()) => {}
         }
     }
 }

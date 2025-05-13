@@ -1,5 +1,5 @@
 use crate::UbwError;
-use crate::client::WorkInstance;
+use crate::client::{Http1ConnectionPool, WorkInstance};
 use crate::opts::{Opts, WrappedHeaderMap};
 use crate::work_mode::{PostWorkModeSpec, RequestCounter, WorkMode};
 use std::net::{IpAddr, SocketAddr};
@@ -99,6 +99,7 @@ pub async fn prepare_work_instance(args: Opts) -> Result<WorkInstance, UbwError>
         mode: work_mode,
         header_map,
         request_counter: RequestCounter::new(),
+        connection_pool: Http1ConnectionPool::new(args.concurrent as usize),
     })
 }
 
