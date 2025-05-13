@@ -15,11 +15,7 @@ use url::Url;
 pub enum ClientResult {
     Code(ClientResponseCodeType),
     Timeout,
-    TlsError(native_tls::Error),
-    HyperError(hyper::Error),
-    HttpError(http::Error),
-    IoError(std::io::Error),
-    ConnectionClosed,
+    Error
 }
 
 pub enum Stream {
@@ -70,9 +66,26 @@ pub struct WorkInstance {
     pub request_counter: RequestCounter,
 }
 
+#[derive(Debug, Default)]
+pub struct WorkerState {
+    pub existing_request: Option<http1::SendRequest<Full<Bytes>>>,
+}
+
+impl WorkerState {
+    pub fn new(existing_request: http1::SendRequest<Full<Bytes>>) -> Self {
+        Self {
+            existing_request: Some(existing_request),
+        }
+    }
+}
+
 impl WorkInstance {
-    pub async fn connect(&self) -> Result<Stream, std::io::Error> {
+    /// Connect to the socket, if TLS is needed, perform a TLS handshake. 
+    pub async fn connect(&self) -> anyhow::Result<Stream> {
         let stream = TcpStream::connect(&self.address).await?;
+        if self.url.scheme() == "https" {
+            return Ok(self.tls(stream).await.map(Stream::Tls)?);
+        }
         Ok(Stream::Tcp(stream))
     }
 
@@ -137,185 +150,75 @@ impl WorkInstance {
             _ => ClientResponseCodeType::Failure,
         }
     }
-
-    /// Sends a single request using an existing connection if provided, or creates a new one.
-    /// Returns the result of the request and a boolean indicating if a TLS handshake was performed.
-    pub async fn send_single_request(
+    
+    /// Initializes the worker state by connecting to the server and performing a TLS handshake if needed.
+    pub async fn init_state(
         &self,
-        existing_send_request: Option<http1::SendRequest<Full<Bytes>>>,
-    ) -> (ClientResult, bool) {
-        // Build the request
-        let request = match self.build_request().await {
-            Ok(req) => req,
-            Err(e) => return (ClientResult::HttpError(e), false),
-        };
-
-        // If we have an existing connection, try to use it
-        if let Some(mut send_request) = existing_send_request {
-            match send_request.send_request(request).await {
-                Ok(response) => {
-                    let status = response.status();
-                    let code_type = Self::status_to_code_type(status);
-                    self.request_counter.inc(code_type);
-                    return (ClientResult::Code(code_type), false);
-                }
-                Err(e) => {
-                    // Connection might be closed, need to create a new one
-                    self.request_counter.inc(ClientResponseCodeType::Failure);
-                    return (ClientResult::HyperError(e), false);
-                }
-            }
-        }
-
-        // No existing connection or it failed, create a new one
-        let stream = match self.connect().await {
-            Ok(stream) => stream,
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                return (ClientResult::IoError(e), false);
-            }
-        };
-
-        // Check if we need TLS
-        let (stream, did_tls_handshake) = if self.url.scheme() == "https" {
-            match stream {
-                Stream::Tcp(tcp_stream) => match self.tls(tcp_stream).await {
-                    Ok(tls_stream) => (Stream::Tls(tls_stream), true),
-                    Err(e) => {
-                        self.request_counter.inc(ClientResponseCodeType::Failure);
-                        return (ClientResult::TlsError(e), false);
-                    }
-                },
-                Stream::Tls(tls_stream) => (Stream::Tls(tls_stream), false),
-            }
-        } else {
-            (stream, false)
-        };
-
-        // Perform HTTP handshake
-        let mut send_request = match stream.handshake_http1(false).await {
-            Ok(send_req) => send_req,
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                return (ClientResult::HyperError(e), did_tls_handshake);
-            }
-        };
-
-        // Send the request
-        match send_request.send_request(request).await {
-            Ok(response) => {
-                let status = response.status();
-                let code_type = Self::status_to_code_type(status);
-                self.request_counter.inc(code_type);
-                (ClientResult::Code(code_type), did_tls_handshake)
-            }
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                (ClientResult::HyperError(e), did_tls_handshake)
-            }
-        }
+    ) -> anyhow::Result<http1::SendRequest<Full<Bytes>>> {
+        let stream = self.connect().await?;
+        let send_request = stream.handshake_http1(false).await?;
+        Ok(send_request)
     }
 
     /// Sends a single request and returns a new SendRequest object that can be reused
     /// for subsequent requests, along with the result and whether a TLS handshake was performed.
     pub async fn send_request_with_reuse(
         &self,
-        existing_send_request: Option<http1::SendRequest<Full<Bytes>>>,
-    ) -> (ClientResult, bool, Option<http1::SendRequest<Full<Bytes>>>) {
-        // Build the request
-        let request = match self.build_request().await {
-            Ok(req) => req,
-            Err(e) => return (ClientResult::HttpError(e), false, None),
-        };
-
+        request: http::Request<Full<Bytes>>,
+        worker_state: WorkerState,
+    ) -> (ClientResult, WorkerState) {
         // If we have an existing connection, try to use it
-        if let Some(mut send_request) = existing_send_request {
-            match send_request.send_request(request).await {
-                Ok(response) => {
-                    let status = response.status();
-                    let code_type = Self::status_to_code_type(status);
-                    self.request_counter.inc(code_type);
-                    // Consume the response body to free up the connection for reuse
-                    let _ = response.collect().await;
-                    return (ClientResult::Code(code_type), false, Some(send_request));
-                }
-                Err(_) => {
-                    // Connection might be closed, need to create a new one
-                    self.request_counter.inc(ClientResponseCodeType::Failure);
-                    // Don't return the failed send_request
-                    return (ClientResult::ConnectionClosed, false, None);
-                }
-            }
+        if let Some(send_request) = worker_state.existing_request {
+            return send_single_request(send_request, request).await;
         }
 
         // No existing connection or it failed, create a new one
-        let stream = match self.connect().await {
-            Ok(stream) => stream,
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                return (ClientResult::IoError(e), false, None);
-            }
-        };
+        match self.init_state().await {
+            Ok(state) => {
+                send_single_request(state, request).await
+            },
+            Err(_) => (ClientResult::Error, WorkerState {
+                existing_request: None,
+            }),
+        }
+    }
+}
 
-        // Check if we need TLS
-        let (stream, did_tls_handshake) = if self.url.scheme() == "https" {
-            match stream {
-                Stream::Tcp(tcp_stream) => match self.tls(tcp_stream).await {
-                    Ok(tls_stream) => (Stream::Tls(tls_stream), true),
-                    Err(e) => {
-                        self.request_counter.inc(ClientResponseCodeType::Failure);
-                        return (ClientResult::TlsError(e), false, None);
-                    }
-                },
-                Stream::Tls(tls_stream) => (Stream::Tls(tls_stream), false),
-            }
-        } else {
-            (stream, false)
-        };
-
-        // Perform HTTP handshake
-        let mut send_request = match stream.handshake_http1(false).await {
-            Ok(send_req) => send_req,
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                return (ClientResult::HyperError(e), did_tls_handshake, None);
-            }
-        };
-
-        // Send the request
-        match send_request.send_request(request).await {
-            Ok(response) => {
-                let status = response.status();
-                let code_type = Self::status_to_code_type(status);
-                self.request_counter.inc(code_type);
-                // Consume the response body to free up the connection for reuse
-                let _ = response.collect().await;
-                (
-                    ClientResult::Code(code_type),
-                    did_tls_handshake,
-                    Some(send_request),
-                )
-            }
-            Err(e) => {
-                self.request_counter.inc(ClientResponseCodeType::Failure);
-                (ClientResult::HyperError(e), did_tls_handshake, None)
-            }
+pub async fn send_single_request(
+    mut conn: http1::SendRequest<Full<Bytes>>,
+    request: http::Request<Full<Bytes>>,
+) -> (ClientResult, WorkerState) {
+    match conn.send_request(request).await {
+        Ok(response) => {
+            let status = response.status();
+            let code_type = WorkInstance::status_to_code_type(status);
+            // Consume the response body to free up the connection for reuse
+            let _ = response.collect().await;
+            (ClientResult::Code(code_type), WorkerState {
+                existing_request: Some(conn),
+            })
+        }
+        Err(_) => {
+            (ClientResult::Error, WorkerState {
+                existing_request: None,
+            })
         }
     }
 }
 
 pub async fn request_loop(
     work_instance: Arc<WorkInstance>,
+    request: Arc<http::Request<Full<Bytes>>>,
     shutdown_signal: &mut tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut send_request = None;
+    let mut state = WorkerState::default();
     loop {
         tokio::select! {
             _ = shutdown_signal.changed() => {
                 break;
             }
-            result = work_instance.send_request_with_reuse(send_request) => {
-                send_request = result.2;
+            result = work_instance.send_request_with_reuse((*request).clone(), state) => {
+                state = result.1;
             }
         }
     }

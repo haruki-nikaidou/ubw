@@ -58,6 +58,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let work_instance = before_request::prepare_work_instance(opts).await?;
+    let request = work_instance.build_request().await?;
+    let request = std::sync::Arc::new(request);
     let work_instance = std::sync::Arc::new(work_instance);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -66,8 +68,9 @@ async fn main() -> anyhow::Result<()> {
     for _ in 0..concurrent {
         let work_instance = work_instance.clone();
         let mut shutdown_rx = shutdown_rx.clone();
+        let request = request.clone();
         handlers.spawn(async move {
-            client::request_loop(work_instance, &mut shutdown_rx).await;
+            client::request_loop(work_instance, request ,&mut shutdown_rx).await;
         });
     }
     
