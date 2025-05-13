@@ -11,13 +11,6 @@ use tokio::net::TcpStream;
 use tokio_native_tls::{TlsStream, native_tls};
 use url::Url;
 
-#[derive(Debug)]
-pub enum ClientResult {
-    Code(ClientResponseCodeType),
-    Timeout,
-    Error
-}
-
 pub enum Stream {
     Tcp(TcpStream),
     Tls(TlsStream<TcpStream>),
@@ -150,7 +143,7 @@ impl WorkInstance {
             _ => ClientResponseCodeType::Failure,
         }
     }
-    
+
     /// Initializes the worker state by connecting to the server and performing a TLS handshake if needed.
     pub async fn init_state(
         &self,
@@ -166,20 +159,20 @@ impl WorkInstance {
         &self,
         request: http::Request<Full<Bytes>>,
         worker_state: WorkerState,
-    ) -> (ClientResult, WorkerState) {
+    ) -> WorkerState {
         // If we have an existing connection, try to use it
         if let Some(send_request) = worker_state.existing_request {
-            return send_single_request(send_request, request).await;
+            return send_single_request(send_request, request, &self.request_counter).await;
         }
 
         // No existing connection or it failed, create a new one
         match self.init_state().await {
             Ok(state) => {
-                send_single_request(state, request).await
+                send_single_request(state, request, &self.request_counter).await
             },
-            Err(_) => (ClientResult::Error, WorkerState {
+            Err(_) => WorkerState {
                 existing_request: None,
-            }),
+            },
         }
     }
 }
@@ -187,21 +180,24 @@ impl WorkInstance {
 pub async fn send_single_request(
     mut conn: http1::SendRequest<Full<Bytes>>,
     request: http::Request<Full<Bytes>>,
-) -> (ClientResult, WorkerState) {
+    counter: &RequestCounter,
+) -> WorkerState {
     match conn.send_request(request).await {
         Ok(response) => {
             let status = response.status();
             let code_type = WorkInstance::status_to_code_type(status);
+            counter.inc(code_type);
             // Consume the response body to free up the connection for reuse
             let _ = response.collect().await;
-            (ClientResult::Code(code_type), WorkerState {
+            WorkerState {
                 existing_request: Some(conn),
-            })
+            }
         }
         Err(_) => {
-            (ClientResult::Error, WorkerState {
+            counter.inc(ClientResponseCodeType::Failure);
+            WorkerState {
                 existing_request: None,
-            })
+            }
         }
     }
 }
@@ -218,7 +214,7 @@ pub async fn request_loop(
                 break;
             }
             result = work_instance.send_request_with_reuse((*request).clone(), state) => {
-                state = result.1;
+                state = result;
             }
         }
     }
