@@ -1,12 +1,12 @@
 use crate::work_mode::{ClientResponseCodeType, RequestCounter, WorkMode};
 use bytes::Bytes;
-use compact_str::CompactString;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1;
 use hyper::{HeaderMap, StatusCode, http};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsStream, native_tls};
 use url::Url;
@@ -53,9 +53,6 @@ pub struct WorkInstance {
     pub address: SocketAddr,
     pub mode: WorkMode,
     pub header_map: HeaderMap,
-    pub accept_headers: Vec<CompactString>,
-    pub proxy_headers: Vec<CompactString>,
-    pub max_time: Option<chrono::Duration>,
     pub request_counter: RequestCounter,
 }
 
@@ -182,6 +179,7 @@ impl WorkInstance {
                             existing_request: None,
                         };
                     }
+                    tokio::time::sleep(Duration::from_millis(2u64.pow(retries as u32))).await;
                     // Continue to retry
                 }
             }
